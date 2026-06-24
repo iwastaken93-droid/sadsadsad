@@ -1,0 +1,33 @@
+{
+  "productName": "RoastMe",
+  "version": "0.1.0",
+  "identifier": "com.roastme.app",
+  "build": {
+    "beforeBuildCommand": "cd web && npm install && npm run build",
+    "beforeDevCommand": "cd web && npm run dev",
+    "devUrl": "http://localhost:5173",
+    "frontendDist": "../web/dist"
+  },
+  "app": {
+    "title": "RoastMe — Code Roaster",
+    "windows": [
+      {
+        "title": "RoastMe 🔥",
+        "width": 1200,
+        "height": 800,
+        "minWidth": 800,
+        "minHeight": 600,
+        "resizable": true
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "plugins": {
+    "shell": {
+      "scope": [],
+      "sidecar": true
+    }
+  }
+}
