@@ -1,0 +1,148 @@
+name: Build & Release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: ubuntu-22.04
+            args: ""
+            target: linux
+          - platform: macos-14
+            args: ""
+            target: macos
+          - platform: windows-latest
+            args: ""
+            target: windows
+
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ── Setup Node.js ──
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      # ── Setup Python ──
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      # ── Setup Rust ──
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target == 'windows' && 'x86_64-pc-windows-msvc' || matrix.target == 'macos' && 'aarch64-apple-darwin,x86_64-apple-darwin' || 'x86_64-unknown-linux-gnu' }}
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+
+      # ── Install system deps (Linux) ──
+      - name: Install Linux deps
+        if: matrix.target == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+
+      # ── Install Python deps ──
+      - name: Install Python deps
+        run: |
+          pip install -e ".[dev]"
+
+      # ── Install frontend deps ──
+      - name: Install frontend
+        run: |
+          cd web
+          npm ci
+          npm run build
+          cd ..
+
+      # ── Build Tauri app ──
+      - name: Build RoastMe
+        run: cargo tauri build ${{ matrix.args }}
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+
+      # ── Upload artifacts ──
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: roastme-${{ matrix.target }}
+          path: |
+            src-tauri/target/release/bundle/**/*.msi
+            src-tauri/target/release/bundle/**/*.dmg
+            src-tauri/target/release/bundle/**/*.AppImage
+            src-tauri/target/release/bundle/**/*.deb
+            src-tauri/target/release/bundle/**/*.tar.gz
+          if-no-files-found: warn
+
+  # ── Release job (creates a GitHub Release on push to main) ──
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          pattern: roastme-*
+
+      - name: Prepare release files
+        run: |
+          mkdir -p release-upload
+          find release-assets -type f \( \
+            -name "*.msi" -o \
+            -name "*.dmg" -o \
+            -name "*.AppImage" -o \
+            -name "*.deb" -o \
+            -name "*.tar.gz" \
+          \) -exec cp {} release-upload/ \;
+          ls -la release-upload/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ github.run_number }}
+          name: RoastMe v${{ github.run_number }}
+          body: |
+            🔥 RoastMe Desktop App — Auto-built from `${{ github.sha }}`
+
+            ## Downloads
+            | Platform | File |
+            |----------|------|
+            | Windows | `.msi` installer |
+            | macOS | `.dmg` disk image |
+            | Linux | `.AppImage` or `.deb` |
+
+            ## First Run
+            1. Install the app
+            2. Click ⚙️ Settings (bottom-right)
+            3. Paste your API key (OpenAI, Ollama, OpenRouter, etc.)
+            4. Drop in a code file and hit ROAST MY CODE
+          files: release-upload/*
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
